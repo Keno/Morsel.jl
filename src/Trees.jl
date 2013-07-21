@@ -39,21 +39,31 @@ abstract SearchStrategy
 
 type DFS <: SearchStrategy end
 
-type PRUNE end
-
 function search(tree::Tree, pred::Function)
     action = pred(tree.value)
     if action == true
-        tree.value
-    elseif action == PRUNE
-        nothing
-    else
+        (tree.value,false)
+    elseif action == :prune
+        (nothing,false)
+    elseif action == :defer
+        (tree.value,true)
+    elseif action == false
+        defered = nothing
         for child in tree.children
-            val = search(child, pred)
+            val,isdefered = search(child, pred)
             if val != nothing
-                return val
+                if !isdefered
+                    return (val,false)
+                elseif defered !== nothing
+                    error("Multiple fallback routes")
+                else
+                    defered = val
+                end
             end
         end
-        nothing
+        if defered !== nothing
+            return (defered,false)
+        end
+        (nothing,false)
     end
 end

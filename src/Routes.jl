@@ -20,6 +20,15 @@ ismatch(s1::StringNode, s2::String)     = isequal(s1, s2)
 #
 getname(p::String) = Base.ismatch(r"^<([^\:]*)::", p) ? match(r"^<([^\:]*)::", p).captures[1] : nothing
 
+
+# Catches all
+# 
+# Specified as "/foo/bar/<*>"
+
+immutable CatchAllNode <: RouteNode
+end
+ismatch(::CatchAllNode,string) = true
+
 # DynamicNodes
 #
 # Route search uses `regex` to validate matches,
@@ -48,7 +57,9 @@ DynamicNode(n::String, r::Regex)    = DynamicNode(n,r,nothing)
 DynamicNode(p::String, c::Function) = DynamicNode(getname(p), Regex("^$(match(r":%([^>]*)>", p).captures[1])\$"), c)
 
 # Equality & Matching for building / traversing the routing table
+isequal(s1::CatchAllNode, s2::StringNode) = false
 isequal(s1::DynamicNode, s2::String)      = Base.ismatch( s1.regex, s2 )
+isequal(s1::DynamicNode, s2::StringNode)      = Base.ismatch( s1.regex, s2.val )
 isequal(s1::DynamicNode, s2::DynamicNode) = s1.regex.pattern == s2.regex.pattern && s1.name == s2.name
 ismatch(s1::DynamicNode, s2::String)      = isequal( s1, s2 )
 
@@ -68,8 +79,8 @@ const DataTypeNodeBuilders = (String => (Regex, Function))[
 DataTypeNode(p::String, t::String) = DynamicNode(getname(p), DataTypeNodeBuilders[t]...)
 
 # Build the params dataset – dispatch needed for both route types.
-extend_params(params::Params, v::RouteNode, p::String) = params
-extend_params(params::Params, v::DynamicNode, p::String) = params[v.name] = v.convert == nothing ? p : v.convert(p)
+extend_params!(params::Params, v::RouteNode, p::String) = params
+extend_params!(params::Params, v::DynamicNode, p::String) = (params[v.name] = (v.convert == nothing ? p : v.convert(p));params)
 
 typealias Route (RouteNode,Union(Function,Nothing)) # ('/about', function()...)
 isequal(r::Route, v) = isequal(r[1], v)
@@ -84,10 +95,11 @@ ismatch(node::String, resource_chunk::String) = node == resource_chunk
 # Regex matchers for determining DynamicRoute types =>
 # Functions for building matching type from `part`.
 #
-const dynamic_route_dispatch = (Regex => Function)[
-    r"^<[^:%]*::%"          => RegexNode,
-    r"^<[^:>]*::[^%>]*>$"   => part -> DataTypeNode(part, match(r"^<[^:>]*::([^%>]*)>$", part).captures[1]),
-    r"^<[^:>]*>$"           => NamedParamNode
+const dynamic_route_dispatch = (Regex => Function)[   
+    r"^<\*>"               => (string)->CatchAllNode(),
+    r"^<[^*:%]*::%"          => RegexNode,
+    r"^<[^*:>]*::[^%>]*>$"   => part -> DataTypeNode(part, match(r"^<[^:>]*::([^%>]*)>$", part).captures[1]),
+    r"^<[^*:>]*>$"           => NamedParamNode
 ]
 
 # Run for each part of a route, builds RouteNodes.
@@ -157,18 +169,20 @@ end
 # This is used to indicate that it is not neccessary to continue searching a
 # given branch of the `RoutingTable`.
 #
-function searchroute(parts::Array, params::Params)
-    function searchpred(val)
-        if ismatch(val, parts[1])
-            params = extend_params(params, val[1], parts[1])
-            if length(parts) == 1
-                true
-            else
-                parts = parts[2:end]; false
-            end
+function searchroute(val, parts::Array, params::Params)
+    if ismatch(val, parts[1])
+        extend_params!(params, val[1], parts[1])
+        if length(parts) == 1
+            true
         else
-            PRUNE
+            shift!(parts)
+            if typeof(val[1]) === CatchAllNode
+                return :defer
+            end
+            return false
         end
+    else
+        :prune
     end
 end
 
@@ -178,6 +192,6 @@ end
 #
 function match_route_handler(table::RoutingTable, parts::Array)
     params = Params()
-    result = search(table, searchroute(parts, params))
+    result,_ = search(table, val->searchroute(val,parts, params))
     ((result != nothing ? result[2] : nothing), params)
 end

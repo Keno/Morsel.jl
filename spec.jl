@@ -61,7 +61,7 @@ namespace(app, "/admin", auth) do
 end
 
 route(app, "/*") do req, res
-    res.headers["Status"] = 404
+    res.http_res.headers["Status"] = 404
     render("404.ejl")
 end
 
